@@ -1,23 +1,181 @@
 import { NextRequest, NextResponse } from "next/server";
+import sanitizeHtml from "sanitize-html";
 
 export const runtime = "nodejs";
-export const revalidate = 300;
+export const revalidate = 600;
 
 const WIKI_API =
   "https://en.wikipedia.org/w/api.php?action=parse&format=json&prop=text%7Cdisplaytitle&redirects=1&page=";
+
+const RATE_LIMIT_PER_MIN = 60;
+const rateBuckets = new Map<string, { count: number; resetAt: number }>();
+
+function clientIp(req: NextRequest): string {
+  const xff = req.headers.get("x-forwarded-for");
+  if (xff) return xff.split(",")[0].trim();
+  return req.headers.get("x-real-ip") || "unknown";
+}
+
+function checkRateLimit(ip: string): { ok: boolean; retryAfterSec: number } {
+  const now = Date.now();
+  const bucket = rateBuckets.get(ip);
+  if (!bucket || bucket.resetAt <= now) {
+    rateBuckets.set(ip, { count: 1, resetAt: now + 60_000 });
+    return { ok: true, retryAfterSec: 0 };
+  }
+  if (bucket.count >= RATE_LIMIT_PER_MIN) {
+    return { ok: false, retryAfterSec: Math.ceil((bucket.resetAt - now) / 1000) };
+  }
+  bucket.count++;
+  return { ok: true, retryAfterSec: 0 };
+}
+
+if (typeof setInterval !== "undefined") {
+  setInterval(() => {
+    const now = Date.now();
+    for (const [k, v] of rateBuckets) {
+      if (v.resetAt <= now) rateBuckets.delete(k);
+    }
+  }, 60_000).unref?.();
+}
+
+const BLOCKED_CLASSES = new Set([
+  "infobox",
+  "navbox",
+  "sidebar",
+  "hatnote",
+  "thumb",
+  "metadata",
+  "mw-editsection",
+  "reference",
+  "references",
+  "reflist",
+  "noprint",
+  "mw-empty-elt",
+  "toc",
+  "navigation-not-searchable",
+  "portal",
+  "vcard",
+  "succession-box",
+]);
+
+function hasBlockedClass(attribs: Record<string, string>): boolean {
+  const cls = attribs.class;
+  if (!cls) return false;
+  const tokens = cls.split(/\s+/);
+  for (const t of tokens) if (BLOCKED_CLASSES.has(t)) return true;
+  return false;
+}
+
+function sanitize(html: string): string {
+  const cleaned = sanitizeHtml(html, {
+    allowedTags: [
+      "p",
+      "div",
+      "span",
+      "a",
+      "b",
+      "i",
+      "em",
+      "strong",
+      "u",
+      "ul",
+      "ol",
+      "li",
+      "dl",
+      "dt",
+      "dd",
+      "h1",
+      "h2",
+      "h3",
+      "h4",
+      "h5",
+      "h6",
+      "blockquote",
+      "br",
+      "hr",
+      "code",
+      "pre",
+    ],
+    allowedAttributes: {
+      a: ["data-wiki-title", "class"],
+      div: ["class"],
+      span: ["class"],
+      "*": [],
+    },
+    allowedSchemes: [],
+    disallowedTagsMode: "discard",
+    exclusiveFilter: (frame) => {
+      if (frame.tag === "span" || frame.tag === "div") {
+        if (hasBlockedClass(frame.attribs)) return true;
+      }
+      return false;
+    },
+    transformTags: {
+      a: (_tagName, attribs) => {
+        const href = attribs.href || "";
+        const cls = attribs.class || "";
+        const drop = { tagName: "span", attribs: {} as Record<string, string> };
+        if (!href.startsWith("/wiki/")) return drop;
+        if (
+          cls.includes("new") ||
+          cls.includes("extiw") ||
+          cls.includes("external") ||
+          cls.includes("image")
+        ) {
+          return drop;
+        }
+        let rawTitle: string;
+        try {
+          rawTitle = decodeURIComponent(
+            href.slice("/wiki/".length).split("#")[0].replace(/_/g, " ")
+          );
+        } catch {
+          return drop;
+        }
+        if (rawTitle.includes(":")) return drop;
+        return {
+          tagName: "a",
+          attribs: {
+            "data-wiki-title": rawTitle,
+            class: "wiki-link",
+          },
+        };
+      },
+    },
+  });
+  return `<div class="wiki-article">${cleaned}</div>`;
+}
+
+function stripTags(s: string): string {
+  return sanitizeHtml(s, { allowedTags: [], allowedAttributes: {} });
+}
 
 export async function GET(req: NextRequest) {
   const title = req.nextUrl.searchParams.get("title");
   if (!title) {
     return NextResponse.json({ error: "missing title" }, { status: 400 });
   }
+
+  const ip = clientIp(req);
+  const rl = checkRateLimit(ip);
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: "rate limit exceeded" },
+      {
+        status: 429,
+        headers: { "Retry-After": String(rl.retryAfterSec) },
+      }
+    );
+  }
+
   const url = WIKI_API + encodeURIComponent(title);
   const res = await fetch(url, {
     headers: {
       "User-Agent": "wiki-race/0.1 (team onsite game; contact: local)",
       Accept: "application/json",
     },
-    next: { revalidate: 300 },
+    next: { revalidate: 600 },
   });
   if (!res.ok) {
     return NextResponse.json(
@@ -39,138 +197,21 @@ export async function GET(req: NextRequest) {
       { status: 404 }
     );
   }
+
   const rawHtml = data.parse.text["*"];
-  const { html, links } = sanitize(rawHtml);
-  return NextResponse.json({
-    title: data.parse.title,
-    displayTitle: stripTags(data.parse.displaytitle),
-    html,
-    links,
-  });
-}
+  const html = sanitize(rawHtml);
 
-function stripTags(s: string): string {
-  return s.replace(/<[^>]*>/g, "");
-}
-
-function sanitize(html: string): { html: string; links: string[] } {
-  let out = html;
-
-  out = out.replace(/<!--([\s\S]*?)-->/g, "");
-  out = out.replace(/<script[\s\S]*?<\/script>/gi, "");
-  out = out.replace(/<style[\s\S]*?<\/style>/gi, "");
-  out = out.replace(/<img[^>]*>/gi, "");
-  out = out.replace(/<figure[\s\S]*?<\/figure>/gi, "");
-  out = out.replace(/<table[\s\S]*?<\/table>/gi, "");
-  out = out.replace(/<audio[\s\S]*?<\/audio>/gi, "");
-  out = out.replace(/<video[\s\S]*?<\/video>/gi, "");
-  out = out.replace(/<link[^>]*>/gi, "");
-  out = out.replace(/<meta[^>]*>/gi, "");
-
-  out = removeByClass(out, "infobox");
-  out = removeByClass(out, "navbox");
-  out = removeByClass(out, "sidebar");
-  out = removeByClass(out, "hatnote");
-  out = removeByClass(out, "thumb");
-  out = removeByClass(out, "metadata");
-  out = removeByClass(out, "mw-editsection");
-  out = removeByClass(out, "reference");
-  out = removeByClass(out, "references");
-  out = removeByClass(out, "reflist");
-  out = removeByClass(out, "noprint");
-  out = removeByClass(out, "mw-empty-elt");
-  out = removeByClass(out, "toc");
-
-  const links = new Set<string>();
-  out = out.replace(
-    /<a\b([^>]*)>([\s\S]*?)<\/a>/gi,
-    (match, attrs: string, inner: string) => {
-      const hrefMatch = attrs.match(/href\s*=\s*"([^"]+)"/i);
-      if (!hrefMatch) return stripInner(inner);
-      const href = hrefMatch[1];
-      const classMatch = attrs.match(/class\s*=\s*"([^"]+)"/i);
-      const cls = classMatch ? classMatch[1] : "";
-      if (!href.startsWith("/wiki/")) {
-        return stripInner(inner);
-      }
-      if (
-        cls.includes("new") ||
-        cls.includes("extiw") ||
-        cls.includes("external") ||
-        cls.includes("image")
-      ) {
-        return stripInner(inner);
-      }
-      const rawTitle = decodeURIComponent(
-        href.slice("/wiki/".length).split("#")[0].replace(/_/g, " ")
-      );
-      if (rawTitle.includes(":")) {
-        return stripInner(inner);
-      }
-      links.add(rawTitle);
-      return `<a data-wiki-title="${escapeAttr(
-        rawTitle
-      )}" class="wiki-link">${inner}</a>`;
+  return NextResponse.json(
+    {
+      title: data.parse.title,
+      displayTitle: stripTags(data.parse.displaytitle),
+      html,
+    },
+    {
+      headers: {
+        "Cache-Control":
+          "public, s-maxage=600, stale-while-revalidate=3600",
+      },
     }
   );
-
-  out = `<div class="wiki-article">${out}</div>`;
-  return { html: out, links: Array.from(links) };
-}
-
-function stripInner(inner: string): string {
-  return inner;
-}
-
-function escapeAttr(s: string): string {
-  return s.replace(/"/g, "&quot;");
-}
-
-function removeByClass(html: string, cls: string): string {
-  let result = html;
-  const tags = ["div", "table", "span", "aside", "ul"];
-  for (const tag of tags) {
-    const openPattern = new RegExp(
-      `<${tag}\\b[^>]*class="[^"]*\\b${cls}\\b[^"]*"[^>]*>`,
-      "i"
-    );
-    let safety = 0;
-    while (safety++ < 200) {
-      const openMatch = openPattern.exec(result);
-      if (!openMatch) break;
-      const start = openMatch.index;
-      const afterOpen = start + openMatch[0].length;
-      const closeRe = new RegExp(`<\\/${tag}>`, "gi");
-      const openRe = new RegExp(`<${tag}\\b`, "gi");
-      closeRe.lastIndex = afterOpen;
-      openRe.lastIndex = afterOpen;
-      let depth = 1;
-      let cursor = afterOpen;
-      let end = -1;
-      while (depth > 0) {
-        closeRe.lastIndex = cursor;
-        openRe.lastIndex = cursor;
-        const nextClose = closeRe.exec(result);
-        const nextOpen = openRe.exec(result);
-        if (!nextClose) break;
-        if (nextOpen && nextOpen.index < nextClose.index) {
-          depth++;
-          cursor = nextOpen.index + nextOpen[0].length;
-        } else {
-          depth--;
-          cursor = nextClose.index + nextClose[0].length;
-          if (depth === 0) {
-            end = cursor;
-            break;
-          }
-        }
-      }
-      if (end === -1) {
-        result = result.slice(0, start) + result.slice(afterOpen);
-      } else {
-        result = result.slice(0, start) + result.slice(end);
-      }
-    }
-  }
-  return result;
 }

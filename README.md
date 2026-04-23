@@ -1,48 +1,66 @@
 # wiki-race
 
-Multiplayer Wikipedia racing game for team onsites. Start on one article, race to
-a target article using only internal Wikipedia links. Fewest clicks wins the
+Multiplayer Wikipedia racing game for team onsites. Start on one article, race
+to a target article using only internal Wikipedia links. Fewest clicks wins the
 round. Points accumulate — no elimination.
 
 ## Stack
 
 - **Next.js 14** (App Router) — UI, Wikipedia proxy route
-- **PartyKit** — real-time room state, player sync, round lifecycle
+- **Cloudflare Workers + Durable Objects** — real-time room state, player sync,
+  round lifecycle (one Durable Object per room)
 - **Tailwind** — styling
 - **Wikipedia action API** (`action=parse`) — article HTML source
-- **Netlify** — hosting (static + edge functions); PartyKit hosts the realtime layer
+- **Netlify** — hosts the Next.js front-end
+- **`wrangler`** — Cloudflare's CLI for deploying the Worker
 
 ## Run locally
 
 ```bash
 npm install
 npm run dev            # Next.js on http://localhost:3000
-npm run dev:party      # PartyKit on http://127.0.0.1:1999
+npm run dev:worker     # Cloudflare Worker on http://127.0.0.1:8787
 ```
 
-Open the app in two browser windows/tabs (or devices on the same LAN). The first
-player to join a room automatically becomes the host.
+Open the app in two browser windows/tabs (or devices on the same LAN). The
+first player to join a room automatically becomes the host.
 
-The Next.js app talks to PartyKit via `NEXT_PUBLIC_PARTYKIT_HOST`. For local dev
-it defaults to `127.0.0.1:1999`. For deployment, set:
-
-```
-NEXT_PUBLIC_PARTYKIT_HOST=wiki-race.<your-partykit-username>.partykit.dev
-```
+The Next.js app finds the Worker via `NEXT_PUBLIC_WORKER_HOST`. For local dev
+it defaults to `127.0.0.1:8787`. For deployment, set it to whatever `wrangler
+deploy` prints (without the scheme), e.g.
+`wiki-race.your-subdomain.workers.dev`.
 
 ## Deploy
 
+### 1. Cloudflare Worker (room server)
+
 ```bash
-npm run deploy:party   # partykit deploy (first-time: `npx partykit login`)
+# One-time auth: either of these works
+npx wrangler login                       # interactive (browser)
+# OR for headless / CI:
+export CLOUDFLARE_API_TOKEN=<your-token> # from dash.cloudflare.com → My Profile → API Tokens
+
+npx wrangler deploy                      # alias: npm run deploy:worker
 ```
 
-Then deploy the Next.js app to Netlify. Set `NEXT_PUBLIC_PARTYKIT_HOST` as a
-build-time env var to the PartyKit URL printed by the deploy command.
+The first deploy will print a URL like
+`https://wiki-race.your-subdomain.workers.dev`. Copy the hostname.
+
+### 2. Next.js front-end (Netlify)
+
+Connect this repo in the Netlify dashboard. Netlify auto-detects Next.js via
+`netlify.toml`. Then set the env var:
+
+```
+NEXT_PUBLIC_WORKER_HOST=wiki-race.your-subdomain.workers.dev
+```
+
+(Site settings → Environment variables, then trigger a redeploy.)
 
 ## Puzzle bank
 
-`public/puzzles.json` ships with a seed of hand-crafted puzzles across the three
-difficulty tiers so the app works out of the box.
+`public/puzzles.json` ships with a seed of hand-crafted puzzles across the
+three difficulty tiers so the app works out of the box.
 
 To generate a full bank from Wikipedia:
 
@@ -50,18 +68,18 @@ To generate a full bank from Wikipedia:
 node scripts/generate-puzzles.js --count 200
 ```
 
-This samples random article pairs, runs BFS through Wikipedia's internal link
-graph (depth ≤ 8), and writes puzzles tagged with `optimalPath`, `optimalHops`,
+Samples random article pairs, runs BFS through Wikipedia's internal link graph
+(depth ≤ 8), writes puzzles tagged with `optimalPath`, `optimalHops`,
 `pathCount`, and `difficulty`. The script appends to the existing file, so you
 can stop and resume. Expect long run times — each BFS makes many API calls.
 
 ## Game flow
 
-1. **Lobby** — host creates a room and gets a 4-letter code. Players join.
+1. **Lobby** — host creates a room and gets a 6-letter code. Players join.
 2. **Reveal** — dramatic `START → END` card with a 5-second countdown.
-3. **Race** — 3-minute timer, in-app Wikipedia article reader. Clicks are synced
-   to PartyKit. The host sees a live spectator panel of every racer's current
-   article and hop count.
+3. **Race** — 3-minute timer, in-app Wikipedia article reader. Clicks are
+   synced through the Worker's Durable Object. The host sees a live spectator
+   panel of every racer's current article and hop count.
 4. **Replay** — BFS optimal path shown as "par", each player's path rendered
    below, divergence highlighted, badges awarded (Speed Runner / Longest Route /
    Most Creative), cumulative leaderboard updated.
@@ -84,17 +102,17 @@ can stop and resume. Expect long run times — each BFS makes many API calls.
 app/
   page.tsx              home (create/join)
   room/[code]/page.tsx  connected room (phase router)
-  api/wiki/route.ts     Wikipedia proxy + HTML sanitizer
+  api/wiki/route.ts     Wikipedia proxy + sanitize-html sanitizer + rate limit
 components/
-  useRoom.ts            PartyKit client hook
+  useRoom.ts            WebSocket client hook (with reconnect)
   WikiArticle.tsx       article renderer with click hijacking
   phases/
     Lobby.tsx
     Reveal.tsx
     Race.tsx
     Replay.tsx
-party/
-  server.ts             PartyKit room server
+worker/
+  index.ts              Cloudflare Worker + RoomDO Durable Object
 shared/
   types.ts              shared client/server types
   scoring.ts            BFS-aware scoring + badges
@@ -103,4 +121,17 @@ scripts/
   generate-puzzles.js   offline puzzle bank generator
 public/
   puzzles.json          committed puzzle bank
+wrangler.toml           Cloudflare Worker config
+netlify.toml            Netlify build config (Next.js)
 ```
+
+## Hardening notes
+
+- Wikipedia HTML is sanitized server-side with `sanitize-html` (strict
+  whitelist + `transformTags` for link rewriting + `exclusiveFilter` for
+  blocked classes like `infobox`, `navbox`, `mw-editsection`).
+- `/api/wiki` is rate-limited to 60 req/min per IP.
+- Player names are stripped of control characters and capped at 24 chars.
+- Room storage auto-clears after 24h of inactivity to prevent zombie state.
+- Room codes are 6 letters from a confusable-stripped alphabet (~191M
+  combinations, brute-force resistant for friend-group use).

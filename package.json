@@ -4,27 +4,29 @@
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000",
-    "dev:party": "partykit dev",
+    "dev:worker": "wrangler dev",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
     "generate-puzzles": "node scripts/generate-puzzles.js",
-    "deploy:party": "partykit deploy"
+    "deploy:worker": "wrangler deploy"
   },
   "dependencies": {
-    "next": "14.2.5",
-    "partykit": "0.0.111",
-    "partysocket": "1.0.2",
+    "next": "^14.2.35",
     "react": "18.3.1",
-    "react-dom": "18.3.1"
+    "react-dom": "18.3.1",
+    "sanitize-html": "^2.17.3"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240909.0",
     "@types/node": "20.14.11",
     "@types/react": "18.3.3",
     "@types/react-dom": "18.3.0",
+    "@types/sanitize-html": "^2.16.1",
     "autoprefixer": "10.4.19",
     "postcss": "8.4.39",
     "tailwindcss": "3.4.6",
-    "typescript": "5.5.3"
+    "typescript": "5.5.3",
+    "wrangler": "^3.78.0"
   }
 }

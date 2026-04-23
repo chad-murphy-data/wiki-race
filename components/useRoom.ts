@@ -1,18 +1,24 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import PartySocket from "partysocket";
 import type {
   ClientMessage,
   RoomSnapshot,
   ServerMessage,
 } from "@/shared/types";
 
-function getPartyHost(): string {
-  if (typeof window === "undefined") return "localhost:1999";
-  const env = process.env.NEXT_PUBLIC_PARTYKIT_HOST;
-  if (env) return env;
-  return "127.0.0.1:1999";
+function getWorkerUrl(code: string): string {
+  const host = process.env.NEXT_PUBLIC_WORKER_HOST;
+  if (!host) {
+    if (typeof window !== "undefined" && window.location.hostname === "localhost") {
+      return `ws://127.0.0.1:8787/room/${code}`;
+    }
+    return `ws://127.0.0.1:8787/room/${code}`;
+  }
+  const scheme = host.startsWith("localhost") || host.startsWith("127.")
+    ? "ws"
+    : "wss";
+  return `${scheme}://${host}/room/${code}`;
 }
 
 function persistedId(): string {
@@ -48,60 +54,79 @@ export interface UseRoom {
   error: string | null;
 }
 
+const RECONNECT_DELAYS_MS = [500, 1000, 2000, 4000, 8000];
+
 export function useRoom(code: string, name: string): UseRoom {
   const [snapshot, setSnapshot] = useState<RoomSnapshot | null>(null);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const socketRef = useRef<PartySocket | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
   const playerId = useRef<string>("");
   if (!playerId.current) playerId.current = persistedId();
 
   useEffect(() => {
     if (!code) return;
-    const socket = new PartySocket({
-      host: getPartyHost(),
-      room: code.toLowerCase(),
-    });
-    socketRef.current = socket;
+    let cancelled = false;
+    let attempt = 0;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
     const helloName = name || persistedName("Racer") || "Racer";
-    const onOpen = () => {
-      setConnected(true);
-      const hello: ClientMessage = {
-        t: "hello",
-        playerId: playerId.current,
-        name: helloName,
-      };
-      socket.send(JSON.stringify(hello));
-    };
-    const onClose = () => setConnected(false);
-    const onMessage = (ev: MessageEvent<string>) => {
-      try {
-        const msg = JSON.parse(ev.data) as ServerMessage;
-        if (msg.t === "snapshot") setSnapshot(msg.snapshot);
-        else if (msg.t === "error") setError(msg.message);
-      } catch {
-        // ignore
-      }
+
+    const connect = () => {
+      if (cancelled) return;
+      const ws = new WebSocket(getWorkerUrl(code));
+      wsRef.current = ws;
+
+      ws.addEventListener("open", () => {
+        attempt = 0;
+        setConnected(true);
+        const hello: ClientMessage = {
+          t: "hello",
+          playerId: playerId.current,
+          name: helloName,
+        };
+        ws.send(JSON.stringify(hello));
+      });
+
+      ws.addEventListener("message", (ev) => {
+        try {
+          const msg = JSON.parse(ev.data as string) as ServerMessage;
+          if (msg.t === "snapshot") setSnapshot(msg.snapshot);
+          else if (msg.t === "error") setError(msg.message);
+        } catch {
+          // ignore malformed
+        }
+      });
+
+      ws.addEventListener("close", () => {
+        setConnected(false);
+        if (cancelled) return;
+        const delay =
+          RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)];
+        attempt++;
+        reconnectTimer = setTimeout(connect, delay);
+      });
+
+      ws.addEventListener("error", () => {
+        // close handler will reconnect
+      });
     };
 
-    socket.addEventListener("open", onOpen);
-    socket.addEventListener("close", onClose);
-    socket.addEventListener("message", onMessage);
+    connect();
 
     return () => {
-      socket.removeEventListener("open", onOpen);
-      socket.removeEventListener("close", onClose);
-      socket.removeEventListener("message", onMessage);
-      socket.close();
-      socketRef.current = null;
+      cancelled = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      const ws = wsRef.current;
+      wsRef.current = null;
+      if (ws && ws.readyState <= 1) ws.close();
     };
   }, [code, name]);
 
   const send = (msg: ClientMessage) => {
-    const s = socketRef.current;
-    if (!s) return;
-    s.send(JSON.stringify(msg));
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== 1) return;
+    ws.send(JSON.stringify(msg));
   };
 
   return { snapshot, playerId: playerId.current, send, connected, error };
