@@ -1,0 +1,13 @@
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+# NEXT_PUBLIC_PARTYKIT_HOST should be set in the Netlify UI
+# (Site settings -> Environment variables) to the host printed by
+# `npx partykit deploy` — e.g. wiki-race.your-username.partykit.dev
