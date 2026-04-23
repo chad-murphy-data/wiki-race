@@ -1,4 +1,3 @@
-import type * as Party from "partykit/server";
 import puzzles from "../public/puzzles.json";
 import { pickColor } from "../shared/colors";
 import { computeScores, normalize } from "../shared/scoring";
@@ -10,7 +9,6 @@ import type {
   PlayerRace,
   Puzzle,
   RoomSnapshot,
-  RoundScore,
   ServerMessage,
 } from "../shared/types";
 
@@ -19,7 +17,9 @@ const REVEAL_DURATION_MS = 5 * 1000;
 const ROOM_TTL_MS = 24 * 60 * 60 * 1000;
 const NAME_MAX_LEN = 24;
 
-type ConnectionMeta = { playerId: string };
+interface Env {
+  ROOMS: DurableObjectNamespace;
+}
 
 function sanitizeName(input: string): string {
   const cleaned = (input || "")
@@ -31,24 +31,69 @@ function sanitizeName(input: string): string {
   return cleaned || "Racer";
 }
 
-export default class WikiRaceServer implements Party.Server {
-  players: Map<string, Player> = new Map();
-  hostId: string | null = null;
-  phase: GamePhase = "lobby";
-  puzzle: Puzzle | null = null;
-  difficulty: Difficulty = "medium";
-  raceStartsAt: number | null = null;
-  raceEndsAt: number | null = null;
-  races: Record<string, PlayerRace> = {};
-  lastRound: RoomSnapshot["lastRound"] = null;
-  roundNumber = 0;
-  raceTimer: ReturnType<typeof setTimeout> | null = null;
-  revealTimer: ReturnType<typeof setTimeout> | null = null;
+function corsHeaders(origin: string | null): HeadersInit {
+  const allow = origin || "*";
+  return {
+    "Access-Control-Allow-Origin": allow,
+    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Upgrade",
+    "Access-Control-Max-Age": "86400",
+    Vary: "Origin",
+  };
+}
 
-  constructor(readonly room: Party.Room) {}
+export default {
+  async fetch(req: Request, env: Env): Promise<Response> {
+    const url = new URL(req.url);
+    const origin = req.headers.get("Origin");
 
-  async onStart() {
-    const saved = await this.room.storage.get<{
+    if (req.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: corsHeaders(origin) });
+    }
+
+    const match = url.pathname.match(/^\/room\/([A-Za-z0-9]+)\/?$/);
+    if (!match) {
+      return new Response("not found", {
+        status: 404,
+        headers: corsHeaders(origin),
+      });
+    }
+    const code = match[1].toUpperCase();
+    const id = env.ROOMS.idFromName(code);
+    const stub = env.ROOMS.get(id);
+    return stub.fetch(req);
+  },
+};
+
+interface ConnState {
+  playerId: string;
+}
+
+export class RoomDO {
+  private state: DurableObjectState;
+  private players: Map<string, Player> = new Map();
+  private hostId: string | null = null;
+  private phase: GamePhase = "lobby";
+  private puzzle: Puzzle | null = null;
+  private difficulty: Difficulty = "medium";
+  private raceStartsAt: number | null = null;
+  private raceEndsAt: number | null = null;
+  private races: Record<string, PlayerRace> = {};
+  private lastRound: RoomSnapshot["lastRound"] = null;
+  private roundNumber = 0;
+  private code = "";
+  private loaded = false;
+  private revealTimer: ReturnType<typeof setTimeout> | null = null;
+  private raceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(state: DurableObjectState, _env: Env) {
+    this.state = state;
+  }
+
+  private async ensureLoaded() {
+    if (this.loaded) return;
+    this.loaded = true;
+    const saved = await this.state.storage.get<{
       players: [string, Player][];
       hostId: string | null;
       roundNumber: number;
@@ -57,7 +102,7 @@ export default class WikiRaceServer implements Party.Server {
     if (!saved) return;
     const age = Date.now() - (saved.lastActivity ?? 0);
     if (age > ROOM_TTL_MS) {
-      await this.room.storage.deleteAll();
+      await this.state.storage.deleteAll();
       return;
     }
     saved.players.forEach(([id, p]) =>
@@ -67,8 +112,8 @@ export default class WikiRaceServer implements Party.Server {
     this.roundNumber = saved.roundNumber ?? 0;
   }
 
-  persist() {
-    this.room.storage.put("roomMeta", {
+  private persist() {
+    void this.state.storage.put("roomMeta", {
       players: Array.from(this.players.entries()),
       hostId: this.hostId,
       roundNumber: this.roundNumber,
@@ -76,57 +121,71 @@ export default class WikiRaceServer implements Party.Server {
     });
   }
 
-  onConnect(conn: Party.Connection<ConnectionMeta>) {
-    this.send(conn, { t: "snapshot", snapshot: this.snapshot() });
+  async fetch(req: Request): Promise<Response> {
+    const url = new URL(req.url);
+    const match = url.pathname.match(/^\/room\/([A-Za-z0-9]+)\/?$/);
+    if (match) this.code = match[1].toUpperCase();
+
+    await this.ensureLoaded();
+
+    const upgrade = req.headers.get("Upgrade");
+    if (upgrade !== "websocket") {
+      return new Response("expected websocket upgrade", { status: 426 });
+    }
+
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
+
+    server.accept();
+
+    const conn: ConnState = { playerId: "" };
+    server.addEventListener("message", (ev) => {
+      let data: string;
+      if (typeof ev.data === "string") data = ev.data;
+      else return;
+      this.handleMessage(server, conn, data);
+    });
+    server.addEventListener("close", () => this.handleClose(conn));
+    server.addEventListener("error", () => this.handleClose(conn));
+
+    this.send(server, { t: "snapshot", snapshot: this.snapshot() });
+
+    return new Response(null, { status: 101, webSocket: client });
   }
 
-  onMessage(raw: string, conn: Party.Connection<ConnectionMeta>) {
+  private handleMessage(ws: WebSocket, conn: ConnState, raw: string) {
     let msg: ClientMessage;
     try {
       msg = JSON.parse(raw);
     } catch {
       return;
     }
-    this.handle(msg, conn);
-  }
-
-  onClose(conn: Party.Connection<ConnectionMeta>) {
-    const meta = conn.state;
-    if (!meta?.playerId) return;
-    const p = this.players.get(meta.playerId);
-    if (p) {
-      p.connected = false;
-      this.broadcast();
-      this.persist();
-    }
-  }
-
-  handle(msg: ClientMessage, conn: Party.Connection<ConnectionMeta>) {
     switch (msg.t) {
       case "hello":
-        return this.handleHello(msg, conn);
+        return this.handleHello(ws, conn, msg);
       case "rename":
-        return this.handleRename(msg, conn);
+        return this.handleRename(conn, msg);
       case "claim-host":
         return this.handleClaimHost(conn);
       case "set-difficulty":
-        return this.handleSetDifficulty(msg, conn);
+        return this.handleSetDifficulty(conn, msg);
       case "start-round":
-        return this.handleStartRound(conn);
+        return this.handleStartRound(ws, conn);
       case "next-round":
-        return this.handleNextRound(conn);
+        return this.handleStartRound(ws, conn);
       case "back-to-lobby":
         return this.handleBackToLobby(conn);
       case "click":
-        return this.handleClick(msg, conn);
+        return this.handleClick(conn, msg);
       case "give-up":
         return this.handleGiveUp(conn);
     }
   }
 
-  handleHello(
-    msg: { playerId: string; name: string },
-    conn: Party.Connection<ConnectionMeta>
+  private handleHello(
+    ws: WebSocket,
+    conn: ConnState,
+    msg: { playerId: string; name: string }
   ) {
     const cleanName = sanitizeName(msg.name);
     const existing = this.players.get(msg.playerId);
@@ -149,52 +208,48 @@ export default class WikiRaceServer implements Party.Server {
       this.players.set(msg.playerId, player);
       if (firstPlayer) this.hostId = msg.playerId;
     }
-    conn.setState({ playerId: msg.playerId });
-    this.send(conn, { t: "you", playerId: msg.playerId });
+    conn.playerId = msg.playerId;
+    this.connBy.set(msg.playerId, ws);
+    this.send(ws, { t: "you", playerId: msg.playerId });
     this.broadcast();
     this.persist();
   }
 
-  handleRename(
-    msg: { name: string },
-    conn: Party.Connection<ConnectionMeta>
-  ) {
-    const pid = conn.state?.playerId;
-    if (!pid) return;
-    const p = this.players.get(pid);
+  private handleRename(conn: ConnState, msg: { name: string }) {
+    if (!conn.playerId) return;
+    const p = this.players.get(conn.playerId);
     if (!p) return;
     p.name = sanitizeName(msg.name);
     this.broadcast();
     this.persist();
   }
 
-  handleClaimHost(conn: Party.Connection<ConnectionMeta>) {
-    const pid = conn.state?.playerId;
-    if (!pid) return;
+  private handleClaimHost(conn: ConnState) {
+    if (!conn.playerId) return;
     const hostStillHere =
       this.hostId && this.players.get(this.hostId)?.connected;
     if (hostStillHere) return;
-    this.hostId = pid;
-    this.players.forEach((p) => (p.isHost = p.id === pid));
+    this.hostId = conn.playerId;
+    this.players.forEach((p) => (p.isHost = p.id === conn.playerId));
     this.broadcast();
     this.persist();
   }
 
-  handleSetDifficulty(
-    msg: { difficulty: Difficulty },
-    conn: Party.Connection<ConnectionMeta>
+  private handleSetDifficulty(
+    conn: ConnState,
+    msg: { difficulty: Difficulty }
   ) {
-    if (!this.isHost(conn)) return;
+    if (conn.playerId !== this.hostId) return;
     this.difficulty = msg.difficulty;
     this.broadcast();
   }
 
-  handleStartRound(conn: Party.Connection<ConnectionMeta>) {
-    if (!this.isHost(conn)) return;
+  private handleStartRound(ws: WebSocket, conn: ConnState) {
+    if (conn.playerId !== this.hostId) return;
     if (this.phase !== "lobby" && this.phase !== "replay") return;
     const puzzle = pickPuzzle(this.difficulty);
     if (!puzzle) {
-      this.send(conn, {
+      this.send(ws, {
         t: "error",
         message: `No puzzles available for difficulty ${this.difficulty}.`,
       });
@@ -227,13 +282,8 @@ export default class WikiRaceServer implements Party.Server {
     this.persist();
   }
 
-  handleNextRound(conn: Party.Connection<ConnectionMeta>) {
-    if (!this.isHost(conn)) return;
-    this.handleStartRound(conn);
-  }
-
-  handleBackToLobby(conn: Party.Connection<ConnectionMeta>) {
-    if (!this.isHost(conn)) return;
+  private handleBackToLobby(conn: ConnState) {
+    if (conn.playerId !== this.hostId) return;
     this.clearTimers();
     this.phase = "lobby";
     this.puzzle = null;
@@ -243,14 +293,10 @@ export default class WikiRaceServer implements Party.Server {
     this.broadcast();
   }
 
-  handleClick(
-    msg: { article: string },
-    conn: Party.Connection<ConnectionMeta>
-  ) {
-    const pid = conn.state?.playerId;
-    if (!pid) return;
+  private handleClick(conn: ConnState, msg: { article: string }) {
+    if (!conn.playerId) return;
     if (this.phase !== "race") return;
-    const race = this.races[pid];
+    const race = this.races[conn.playerId];
     const puzzle = this.puzzle;
     if (!race || !puzzle) return;
     if (race.finished) return;
@@ -266,16 +312,13 @@ export default class WikiRaceServer implements Party.Server {
     const allDone = Object.values(this.races).every(
       (r) => r.finished || r.givenUp
     );
-    if (allDone) {
-      this.endRound();
-    }
+    if (allDone) this.endRound();
   }
 
-  handleGiveUp(conn: Party.Connection<ConnectionMeta>) {
-    const pid = conn.state?.playerId;
-    if (!pid) return;
+  private handleGiveUp(conn: ConnState) {
+    if (!conn.playerId) return;
     if (this.phase !== "race") return;
-    const race = this.races[pid];
+    const race = this.races[conn.playerId];
     if (!race || race.finished) return;
     race.givenUp = true;
     this.broadcast();
@@ -285,7 +328,7 @@ export default class WikiRaceServer implements Party.Server {
     if (allDone) this.endRound();
   }
 
-  endRound() {
+  private endRound() {
     if (this.phase !== "race" && this.phase !== "reveal") return;
     this.clearTimers();
     if (!this.puzzle) {
@@ -293,7 +336,7 @@ export default class WikiRaceServer implements Party.Server {
       this.broadcast();
       return;
     }
-    const scores: RoundScore[] = computeScores(
+    const scores = computeScores(
       this.puzzle,
       Array.from(this.players.values()),
       this.races
@@ -312,25 +355,31 @@ export default class WikiRaceServer implements Party.Server {
     this.persist();
   }
 
-  clearTimers() {
-    if (this.raceTimer) {
-      clearTimeout(this.raceTimer);
-      this.raceTimer = null;
-    }
+  private clearTimers() {
     if (this.revealTimer) {
       clearTimeout(this.revealTimer);
       this.revealTimer = null;
     }
+    if (this.raceTimer) {
+      clearTimeout(this.raceTimer);
+      this.raceTimer = null;
+    }
   }
 
-  isHost(conn: Party.Connection<ConnectionMeta>): boolean {
-    const pid = conn.state?.playerId;
-    return !!pid && pid === this.hostId;
+  private handleClose(conn: ConnState) {
+    if (!conn.playerId) return;
+    this.connBy.delete(conn.playerId);
+    const p = this.players.get(conn.playerId);
+    if (p) {
+      p.connected = false;
+      this.broadcast();
+      this.persist();
+    }
   }
 
-  snapshot(): RoomSnapshot {
+  private snapshot(): RoomSnapshot {
     return {
-      code: this.room.id,
+      code: this.code,
       phase: this.phase,
       players: Array.from(this.players.values()),
       hostId: this.hostId,
@@ -344,13 +393,29 @@ export default class WikiRaceServer implements Party.Server {
     };
   }
 
-  broadcast() {
-    const payload: ServerMessage = { t: "snapshot", snapshot: this.snapshot() };
-    this.room.broadcast(JSON.stringify(payload));
+  private connBy: Map<string, WebSocket> = new Map();
+
+  private broadcast() {
+    const payload: ServerMessage = {
+      t: "snapshot",
+      snapshot: this.snapshot(),
+    };
+    const json = JSON.stringify(payload);
+    for (const ws of this.connBy.values()) {
+      try {
+        ws.send(json);
+      } catch {
+        // ignore broken sockets; close handler will clean up
+      }
+    }
   }
 
-  send(conn: Party.Connection, msg: ServerMessage) {
-    conn.send(JSON.stringify(msg));
+  private send(ws: WebSocket, msg: ServerMessage) {
+    try {
+      ws.send(JSON.stringify(msg));
+    } catch {
+      // ignore
+    }
   }
 }
 
@@ -361,4 +426,3 @@ function pickPuzzle(difficulty: Difficulty): Puzzle | null {
   if (pool.length === 0) return null;
   return pool[Math.floor(Math.random() * pool.length)];
 }
-
