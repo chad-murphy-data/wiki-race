@@ -57,7 +57,8 @@ can stop and resume. Expect long run times — each BFS makes many API calls.
 
 ## Game flow
 
-1. **Lobby** — host creates a room and gets a 4-letter code. Players join.
+1. **Lobby** — host creates a room and gets a 6-letter code. Players join.
+
 2. **Reveal** — dramatic `START → END` card with a 5-second countdown.
 3. **Race** — 3-minute timer, in-app Wikipedia article reader. Clicks are synced
    to PartyKit. The host sees a live spectator panel of every racer's current

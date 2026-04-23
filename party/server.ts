@@ -16,8 +16,20 @@ import type {
 
 const RACE_DURATION_MS = 3 * 60 * 1000;
 const REVEAL_DURATION_MS = 5 * 1000;
+const ROOM_TTL_MS = 24 * 60 * 60 * 1000;
+const NAME_MAX_LEN = 24;
 
 type ConnectionMeta = { playerId: string };
+
+function sanitizeName(input: string): string {
+  const cleaned = (input || "")
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x1f\x7f-\x9f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, NAME_MAX_LEN);
+  return cleaned || "Racer";
+}
 
 export default class WikiRaceServer implements Party.Server {
   players: Map<string, Player> = new Map();
@@ -40,14 +52,19 @@ export default class WikiRaceServer implements Party.Server {
       players: [string, Player][];
       hostId: string | null;
       roundNumber: number;
+      lastActivity?: number;
     }>("roomMeta");
-    if (saved) {
-      saved.players.forEach(([id, p]) =>
-        this.players.set(id, { ...p, connected: false })
-      );
-      this.hostId = saved.hostId;
-      this.roundNumber = saved.roundNumber ?? 0;
+    if (!saved) return;
+    const age = Date.now() - (saved.lastActivity ?? 0);
+    if (age > ROOM_TTL_MS) {
+      await this.room.storage.deleteAll();
+      return;
     }
+    saved.players.forEach(([id, p]) =>
+      this.players.set(id, { ...p, connected: false })
+    );
+    this.hostId = saved.hostId;
+    this.roundNumber = saved.roundNumber ?? 0;
   }
 
   persist() {
@@ -55,6 +72,7 @@ export default class WikiRaceServer implements Party.Server {
       players: Array.from(this.players.entries()),
       hostId: this.hostId,
       roundNumber: this.roundNumber,
+      lastActivity: Date.now(),
     });
   }
 
@@ -110,10 +128,11 @@ export default class WikiRaceServer implements Party.Server {
     msg: { playerId: string; name: string },
     conn: Party.Connection<ConnectionMeta>
   ) {
+    const cleanName = sanitizeName(msg.name);
     const existing = this.players.get(msg.playerId);
     if (existing) {
       existing.connected = true;
-      existing.name = msg.name || existing.name;
+      existing.name = cleanName;
     } else {
       const usedColors = new Set(
         Array.from(this.players.values()).map((p) => p.color)
@@ -121,7 +140,7 @@ export default class WikiRaceServer implements Party.Server {
       const firstPlayer = this.players.size === 0;
       const player: Player = {
         id: msg.playerId,
-        name: msg.name || "Racer",
+        name: cleanName,
         color: pickColor(usedColors),
         isHost: firstPlayer || this.hostId === msg.playerId,
         connected: true,
@@ -144,7 +163,7 @@ export default class WikiRaceServer implements Party.Server {
     if (!pid) return;
     const p = this.players.get(pid);
     if (!p) return;
-    p.name = (msg.name || "").slice(0, 24) || p.name;
+    p.name = sanitizeName(msg.name);
     this.broadcast();
     this.persist();
   }

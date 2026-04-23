@@ -3,10 +3,12 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+const CODE_LEN = 6;
+
 function randomCode(): string {
   const letters = "ABCDEFGHJKLMNPQRSTUVWXYZ";
   let out = "";
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < CODE_LEN; i++) {
     out += letters[Math.floor(Math.random() * letters.length)];
   }
   return out;
@@ -30,7 +32,7 @@ export default function Home() {
 
   function join() {
     const c = code.trim().toUpperCase();
-    if (c.length !== 4) return;
+    if (c.length !== CODE_LEN) return;
     const n = name.trim() || "Racer";
     persistName(n);
     router.push(`/room/${c}`);
@@ -79,15 +81,15 @@ export default function Home() {
             <input
               value={code}
               onChange={(e) =>
-                setCode(e.target.value.toUpperCase().slice(0, 4))
+                setCode(e.target.value.toUpperCase().slice(0, CODE_LEN))
               }
               placeholder="CODE"
-              maxLength={4}
-              className="flex-1 bg-black/40 border border-white/15 rounded-lg px-4 py-3 text-2xl tracking-[0.5em] text-center font-mono uppercase focus:border-cool focus:outline-none"
+              maxLength={CODE_LEN}
+              className="flex-1 bg-black/40 border border-white/15 rounded-lg px-4 py-3 text-2xl tracking-[0.3em] text-center font-mono uppercase focus:border-cool focus:outline-none"
             />
             <button
               onClick={join}
-              disabled={code.length !== 4}
+              disabled={code.length !== CODE_LEN}
               className="bg-cool hover:bg-cool/80 disabled:opacity-30 disabled:cursor-not-allowed text-ink font-bold px-6 rounded-lg"
             >
               Join

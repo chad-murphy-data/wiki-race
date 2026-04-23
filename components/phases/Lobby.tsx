@@ -35,7 +35,7 @@ export function Lobby({ snapshot, me, isHost, send }: Props) {
           <div className="text-xs uppercase tracking-widest text-white/40">
             Room code
           </div>
-          <div className="text-5xl font-black font-mono tracking-[0.25em] text-accent">
+          <div className="text-5xl font-black font-mono tracking-[0.15em] text-accent">
             {snapshot.code.toUpperCase()}
           </div>
           {snapshot.roundNumber > 0 && (

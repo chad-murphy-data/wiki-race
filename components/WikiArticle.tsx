@@ -6,7 +6,6 @@ interface WikiResponse {
   title: string;
   displayTitle: string;
   html: string;
-  links: string[];
 }
 
 interface Props {
