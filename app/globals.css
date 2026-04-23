@@ -1,0 +1,98 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background: #0f0e17;
+  color: #fffffe;
+  min-height: 100%;
+}
+
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", sans-serif;
+}
+
+.wiki-article {
+  color: #e8e8ea;
+  line-height: 1.6;
+  font-size: 1rem;
+}
+.wiki-article h1,
+.wiki-article h2,
+.wiki-article h3,
+.wiki-article h4 {
+  color: #fffffe;
+  font-weight: 700;
+  margin-top: 1.25rem;
+  margin-bottom: 0.5rem;
+}
+.wiki-article h2 {
+  font-size: 1.5rem;
+  border-bottom: 1px solid #2a2a38;
+  padding-bottom: 0.25rem;
+}
+.wiki-article h3 {
+  font-size: 1.2rem;
+}
+.wiki-article p {
+  margin: 0.6rem 0;
+}
+.wiki-article ul,
+.wiki-article ol {
+  margin: 0.5rem 0 0.5rem 1.5rem;
+  list-style: disc;
+}
+.wiki-article ol {
+  list-style: decimal;
+}
+.wiki-article li {
+  margin: 0.25rem 0;
+}
+.wiki-article a.wiki-link {
+  color: #3da9fc;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.wiki-article a.wiki-link:hover {
+  color: #ff8906;
+  background: rgba(255, 137, 6, 0.08);
+}
+.wiki-article sup {
+  display: none;
+}
+.wiki-article .mw-editsection,
+.wiki-article .mw-empty-elt {
+  display: none;
+}
+
+.title-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  background: #1a1a2e;
+  border: 1px solid #2a2a38;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chain {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  align-items: center;
+}
+.chain-arrow {
+  color: #6b6b7a;
+  font-size: 0.85rem;
+}

@@ -1,0 +1,181 @@
+[
+  {
+    "id": "seed_easy_1",
+    "start": "Pizza",
+    "end": "France",
+    "optimalPath": ["Pizza", "Italy", "France"],
+    "optimalHops": 2,
+    "pathCount": 1,
+    "difficulty": "easy"
+  },
+  {
+    "id": "seed_easy_2",
+    "start": "Basketball",
+    "end": "Italy",
+    "optimalPath": ["Basketball", "Europe", "Italy"],
+    "optimalHops": 2,
+    "pathCount": 1,
+    "difficulty": "easy"
+  },
+  {
+    "id": "seed_easy_3",
+    "start": "Chocolate",
+    "end": "Japan",
+    "optimalPath": ["Chocolate", "Asia", "Japan"],
+    "optimalHops": 2,
+    "pathCount": 1,
+    "difficulty": "easy"
+  },
+  {
+    "id": "seed_easy_4",
+    "start": "Coffee",
+    "end": "Brazil",
+    "optimalPath": ["Coffee", "South America", "Brazil"],
+    "optimalHops": 2,
+    "pathCount": 1,
+    "difficulty": "easy"
+  },
+  {
+    "id": "seed_easy_5",
+    "start": "Guitar",
+    "end": "Jazz",
+    "optimalPath": ["Guitar", "Music", "Jazz"],
+    "optimalHops": 2,
+    "pathCount": 1,
+    "difficulty": "easy"
+  },
+  {
+    "id": "seed_easy_6",
+    "start": "Volcano",
+    "end": "Hawaii",
+    "optimalPath": ["Volcano", "Pacific Ocean", "Hawaii"],
+    "optimalHops": 2,
+    "pathCount": 1,
+    "difficulty": "easy"
+  },
+  {
+    "id": "seed_medium_1",
+    "start": "Accordion",
+    "end": "French Revolution",
+    "optimalPath": ["Accordion", "Music", "France", "French Revolution"],
+    "optimalHops": 3,
+    "pathCount": 1,
+    "difficulty": "medium"
+  },
+  {
+    "id": "seed_medium_2",
+    "start": "Typewriter",
+    "end": "Dolphin",
+    "optimalPath": ["Typewriter", "Writing", "Communication", "Animal", "Dolphin"],
+    "optimalHops": 4,
+    "pathCount": 1,
+    "difficulty": "medium"
+  },
+  {
+    "id": "seed_medium_3",
+    "start": "Sushi",
+    "end": "Samurai",
+    "optimalPath": ["Sushi", "Japan", "History of Japan", "Samurai"],
+    "optimalHops": 3,
+    "pathCount": 1,
+    "difficulty": "medium"
+  },
+  {
+    "id": "seed_medium_4",
+    "start": "Bicycle",
+    "end": "Space exploration",
+    "optimalPath": [
+      "Bicycle",
+      "Transport",
+      "Aircraft",
+      "Spaceflight",
+      "Space exploration"
+    ],
+    "optimalHops": 4,
+    "pathCount": 1,
+    "difficulty": "medium"
+  },
+  {
+    "id": "seed_medium_5",
+    "start": "Jazz",
+    "end": "Mars",
+    "optimalPath": ["Jazz", "United States", "NASA", "Mars"],
+    "optimalHops": 3,
+    "pathCount": 1,
+    "difficulty": "medium"
+  },
+  {
+    "id": "seed_medium_6",
+    "start": "Chess",
+    "end": "Silk Road",
+    "optimalPath": ["Chess", "India", "Asia", "Silk Road"],
+    "optimalHops": 3,
+    "pathCount": 1,
+    "difficulty": "medium"
+  },
+  {
+    "id": "seed_hard_1",
+    "start": "Lighthouse",
+    "end": "Higgs boson",
+    "optimalPath": [
+      "Lighthouse",
+      "Navigation",
+      "Physics",
+      "Particle physics",
+      "Standard Model",
+      "Elementary particle",
+      "Higgs boson"
+    ],
+    "optimalHops": 6,
+    "pathCount": 1,
+    "difficulty": "hard"
+  },
+  {
+    "id": "seed_hard_2",
+    "start": "Knitting",
+    "end": "Black hole",
+    "optimalPath": [
+      "Knitting",
+      "Textile",
+      "Fiber",
+      "Carbon",
+      "Star",
+      "Supernova",
+      "Black hole"
+    ],
+    "optimalHops": 6,
+    "pathCount": 1,
+    "difficulty": "hard"
+  },
+  {
+    "id": "seed_hard_3",
+    "start": "Taco",
+    "end": "Quantum mechanics",
+    "optimalPath": [
+      "Taco",
+      "Mexico",
+      "North America",
+      "Science",
+      "Physics",
+      "Quantum mechanics"
+    ],
+    "optimalHops": 5,
+    "pathCount": 1,
+    "difficulty": "hard"
+  },
+  {
+    "id": "seed_hard_4",
+    "start": "Accordion",
+    "end": "Alan Turing",
+    "optimalPath": [
+      "Accordion",
+      "Music",
+      "Mathematics",
+      "Computer science",
+      "Alan Turing"
+    ],
+    "optimalHops": 4,
+    "pathCount": 1,
+    "difficulty": "hard"
+  }
+]
